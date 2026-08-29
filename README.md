@@ -220,7 +220,6 @@ overlay/
 ui/
   panel.html         the in-chat panel (MCP Apps resource)
 docs/                screenshots used by this README
-publish.sh           helper that creates the GitHub repo and pushes
 ```
 
 The panel process is started by the extension's server and receives data as JSON

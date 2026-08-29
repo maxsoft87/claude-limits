@@ -10,6 +10,9 @@ node_modules/
 .DS_Store
 *.log
 
+# Local helper — creates the GitHub repo and pushes; not part of the project
+/publish.sh
+
 # Local working leftovers from development, not part of the project.
 # Safe to delete from your working copy.
 /panel.png
