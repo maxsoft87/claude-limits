@@ -1,0 +1,19 @@
+# Build artifact — produced by `mcpb pack`, attached to releases instead
+*.mcpb
+
+# Python / Node leftovers
+__pycache__/
+*.pyc
+node_modules/
+
+# Editor and OS noise
+.DS_Store
+*.log
+
+# Local working leftovers from development, not part of the project.
+# Safe to delete from your working copy.
+/panel.png
+/languages.png
+/overlay-preview.png
+/preview-v27.png
+/src/

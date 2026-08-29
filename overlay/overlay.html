@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Claude · лимиты</title>
+<style>
+  /* Оформление перенесено из исходного оверлея: те же четыре стиля,
+     всплывающие настройки и модалка режима «иконка». */
+  /* color-scheme: dark нужен, чтобы нативные виджеты (в первую очередь
+     выпадающий список) рисовались тёмными, иначе текст в них не читается. */
+  :root { color-scheme: dark; --scale: 1; }
+  html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
+  html, body { height:100%; }
+  body {
+    font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color:#f7f7f8; -webkit-user-select:none; user-select:none;
+  }
+  /* Окно ровно по панели; всплывашки раскрываются вверх, а Python растит окно
+     вверх, потому что прижимает его нижним краем.
+     ВАЖНО: не flex-элемент и width:max-content. Как flex-элемент wrap
+     сжимался до текущей ширины окна, замер возвращал уже сжатую ширину, окно
+     ужималось ещё — и панель схлопывалась сама в себя. */
+  #wrap {
+    position:fixed; right:0; bottom:0;
+    width:max-content; flex:none; flex-shrink:0;
+    zoom: var(--scale);
+  }
+  .panel { flex:none; }
+  .panel {
+    position:relative; box-sizing:border-box;
+    background:rgba(26,26,31,.97); border:1px solid rgba(255,255,255,.14);
+    border-radius:12px; box-shadow:0 14px 38px rgba(0,0,0,.45);
+    overflow:visible; transition:width .12s ease;
+  }
+  .panel.card { width:264px; }
+  .panel.compact { width:360px; }
+  .panel.bar { width:520px; display:flex; align-items:center; }
+  .panel.icon { width:44px; height:44px; border-radius:10px; cursor:pointer; }
+
+  .header { display:flex; justify-content:space-between; align-items:center; gap:6px; padding:7px 10px 5px; font-size:11.5px; }
+  .title { font-weight:650; white-space:nowrap; }
+  .actions { display:flex; gap:4px; }
+  button {
+    appearance:none; border:0; border-radius:5px; padding:3px 6px; font:inherit;
+    font-size:10.5px; color:#dfe0e7; background:rgba(255,255,255,.10); cursor:pointer;
+  }
+  button:hover { background:rgba(255,255,255,.17); }
+  button:disabled { opacity:.55; cursor:default; }
+
+  .rows { padding:0 10px 7px; display:grid; gap:6px; }
+  .row { display:grid; gap:3px; min-width:0; }
+  .line { display:flex; justify-content:space-between; gap:8px; font-size:11.5px; }
+  .name { color:#d8d9e1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .amount { font-weight:650; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .track { height:4px; border-radius:999px; background:rgba(255,255,255,.14); overflow:hidden; }
+  .fill { height:100%; border-radius:inherit; background:#76d19b; transition:width .2s ease; }
+  .fill.warn { background:#f2c45c; }
+  .fill.danger { background:#ef7d7d; }
+  .reset { color:#aeb0bc; font-size:9.5px; }
+  .message { padding:0 10px 7px; color:#aeb0bc; font-size:10px; }
+
+  .settings {
+    display:none; position:absolute; right:0; bottom:calc(100% + 8px); z-index:5;
+    width:190px; box-sizing:border-box; padding:10px;
+    border:1px solid rgba(255,255,255,.14); border-radius:10px;
+    background:#202126; box-shadow:0 12px 30px rgba(0,0,0,.45);
+  }
+  .settings.open { display:block; }
+  .settings-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:7px; }
+  .settings-title { font-size:12px; color:#e1e2e8; font-weight:650; }
+  .settings-title-sub { font-size:10px; color:#aeb0bc; margin:6px 0 3px; }
+  .settings-close { width:22px; height:22px; padding:0; border-radius:6px; font-size:16px; line-height:20px; }
+  .option { display:flex; align-items:center; gap:7px; padding:4px 2px; font-size:11px; color:#d8d9e1; cursor:pointer; }
+  .option input { accent-color:#76d19b; }
+  select {
+    width:100%; box-sizing:border-box; margin-top:2px; padding:3px 6px;
+    font:inherit; font-size:10.5px; color:#e6e7ee; cursor:pointer;
+    background-color:#2a2b31; border:1px solid rgba(255,255,255,.16);
+    border-radius:6px; color-scheme: dark;
+  }
+  select option, select optgroup { background-color:#2a2b31; color:#e6e7ee; }
+
+  /* Компактный и бар — строки в ряд, как в исходнике. */
+  .panel.compact .rows { display:flex; align-items:center; gap:11px; padding:3px 10px 7px; }
+  .panel.compact .row { flex:1; min-width:78px; }
+  .panel.compact .row:nth-child(n+3) { display:none; }
+  .panel.compact .track { height:4px; }
+  .panel.bar .header { padding:7px 10px; min-width:128px; }
+  .panel.bar .rows { display:flex; flex:1; padding:7px 7px; gap:12px; }
+  .panel.bar .row { flex:1; }
+  .panel.bar .message { display:none; }
+  .panel.compact .reset, .panel.bar .reset { display:none; }
+
+  /* Иконка: буква C в рамке, как в исходном оверлее. */
+  .panel.icon .header, .panel.icon .rows, .panel.icon .message { display:none; }
+  .panel.icon::before {
+    content:'C'; display:flex; align-items:center; justify-content:center;
+    width:26px; height:26px; margin:8px; border:1px solid #b96f4b;
+    border-radius:6px; color:#f07a43; font:700 20px Georgia, serif;
+  }
+  .panel.hide-reset .reset { display:none; }
+  .panel.hide-updated .message { display:none; }
+
+  .limits-modal { display:none; position:absolute; right:0; bottom:calc(100% + 8px); z-index:6; width:190px; }
+  .limits-modal.open { display:block; }
+  .limits-box {
+    box-sizing:border-box; padding:10px; border:1px solid rgba(255,255,255,.14);
+    border-radius:10px; background:#202126; box-shadow:0 12px 30px rgba(0,0,0,.45); color:#d8d9e1;
+  }
+  .limits-modal-header { display:flex; align-items:center; justify-content:space-between;
+    gap:8px; margin-bottom:7px; font-size:12px; font-weight:650; color:#e1e2e8; }
+  .limits-modal-actions { display:flex; gap:4px; }
+  .limits-close, .limits-refresh { width:22px; height:22px; padding:0; border-radius:6px; font-size:15px; line-height:20px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="settings" id="settings">
+    <div class="settings-head">
+      <span class="settings-title" data-i18n="settings">Настройки</span>
+      <button class="settings-close" id="settingsClose">×</button>
+    </div>
+    <div class="settings-title-sub" data-i18n="view">Вид</div>
+    <label class="option"><input type="radio" name="style" value="card"> <span data-i18n="card">Карточка</span></label>
+    <label class="option"><input type="radio" name="style" value="compact"> <span data-i18n="compact">Компактный</span></label>
+    <label class="option"><input type="radio" name="style" value="bar"> <span data-i18n="bar">Бар</span></label>
+    <label class="option"><input type="radio" name="style" value="icon"> <span data-i18n="icon">Иконка</span></label>
+    <div class="settings-title-sub" data-i18n="show">Показывать</div>
+    <label class="option"><input type="checkbox" id="showReset"> <span data-i18n="resetTime">Время сброса</span></label>
+    <label class="option"><input type="checkbox" id="showUpdated"> <span data-i18n="updatedTime">Время обновления</span></label>
+    <div class="settings-title-sub" data-i18n="fontSize">Размер шрифта</div>
+    <select id="fontSize">
+      <option value="0.85" data-i18n-opt="fsSmall">Мелкий</option>
+      <option value="1" data-i18n-opt="fsNormal">Обычный</option>
+      <option value="1.15" data-i18n-opt="fsLarge">Крупный</option>
+      <option value="1.3" data-i18n-opt="fsHuge">Очень крупный</option>
+    </select>
+    <div class="settings-title-sub" data-i18n="language">Язык</div>
+    <select id="lang">
+      <option value="en">English</option>
+      <option value="ru">Русский</option>
+      <option value="de">Deutsch</option>
+      <option value="zh">中文</option>
+    </select>
+  </div>
+
+  <div class="limits-modal" id="modal">
+    <div class="limits-box">
+      <div class="limits-modal-header">
+        <span data-i18n="title">Claude · лимиты</span>
+        <span class="limits-modal-actions">
+          <button class="limits-refresh" id="modalRefresh">↻</button>
+          <button class="limits-close" id="modalClose">×</button>
+        </span>
+      </div>
+      <div id="modalRows"></div>
+      <div class="message" id="modalMessage" style="padding:0"></div>
+    </div>
+  </div>
+
+  <section class="panel card" id="panel">
+    <div class="header">
+      <span class="title" data-i18n="title">Claude · лимиты</span>
+      <span class="actions">
+        <button id="refresh">↻</button>
+        <button id="gear">⚙</button>
+      </span>
+    </div>
+    <div class="rows" id="rows"></div>
+    <div class="message" id="message"></div>
+  </section>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const bridge = (payload) => {
+    try { window.webkit.messageHandlers.overlay.postMessage(JSON.stringify(payload)); }
+    catch (_) {}
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    wrap: $('wrap'), panel: $('panel'), rows: $('rows'), lang: $('lang'), fontSize: $('fontSize'),
+    message: $('message'), refresh: $('refresh'), gear: $('gear'),
+    settings: $('settings'), settingsClose: $('settingsClose'),
+    showReset: $('showReset'), showUpdated: $('showUpdated'),
+    modal: $('modal'), modalRows: $('modalRows'), modalMessage: $('modalMessage'),
+    modalRefresh: $('modalRefresh'), modalClose: $('modalClose'),
+  };
+
+  let cfg = { style: 'card', showReset: true, showUpdated: true, lang: null, scale: 1 };
+
+  let limits = null;
+  let order = [], source = null, at = null, note = null;
+
+  const I18N = {
+    en: {
+      title: 'Claude · limits', settings: 'Settings', view: 'View', show: 'Show',
+      card: 'Card', compact: 'Compact', bar: 'Bar', icon: 'Icon',
+      resetTime: 'Reset time', updatedTime: 'Update time', language: 'Language',
+      fontSize: 'Font size', fsSmall: 'Small', fsNormal: 'Normal', fsLarge: 'Large', fsHuge: 'Extra large',
+      waiting: 'Waiting for data', unavailable: 'Limits are not available yet.',
+      used: (n) => `${n}% used`,
+      resetToday: (t) => `resets today at ${t}`,
+      resetTomorrow: (t) => `resets tomorrow at ${t}`,
+      resetOn: (d) => `resets ${d}`,
+      updatedAt: (t, from) => `updated at ${t} · ${from}`,
+      srcApi: 'from Claude', srcHistory: 'from app cache', srcCache: 'from cache',
+      limits: {
+        five_hour: '5 hours', seven_day: '7 days',
+        seven_day_sonnet: 'Sonnet · 7 days', seven_day_opus: 'Opus · 7 days',
+        seven_day_oauth_apps: 'OAuth apps · 7 days', seven_day_cowork: 'Cowork · 7 days',
+      },
+    },
+    ru: {
+      title: 'Claude · лимиты', settings: 'Настройки', view: 'Вид', show: 'Показывать',
+      card: 'Карточка', compact: 'Компактный', bar: 'Бар', icon: 'Иконка',
+      resetTime: 'Время сброса', updatedTime: 'Время обновления', language: 'Язык',
+      fontSize: 'Размер шрифта', fsSmall: 'Мелкий', fsNormal: 'Обычный', fsLarge: 'Крупный', fsHuge: 'Очень крупный',
+      waiting: 'Ожидание данных', unavailable: 'Лимиты пока недоступны.',
+      used: (n) => `использовано ${n}%`,
+      resetToday: (t) => `сброс сегодня в ${t}`,
+      resetTomorrow: (t) => `сброс завтра в ${t}`,
+      resetOn: (d) => `сброс ${d}`,
+      updatedAt: (t, from) => `обновлено в ${t} · ${from}`,
+      srcApi: 'из Claude', srcHistory: 'из кэша приложения', srcCache: 'из кэша',
+      limits: {
+        five_hour: '5 часов', seven_day: '7 дней',
+        seven_day_sonnet: 'Sonnet · 7 дней', seven_day_opus: 'Opus · 7 дней',
+        seven_day_oauth_apps: 'OAuth apps · 7 дней', seven_day_cowork: 'Cowork · 7 дней',
+      },
+    },
+    de: {
+      title: 'Claude · Limits', settings: 'Einstellungen', view: 'Ansicht', show: 'Anzeigen',
+      card: 'Karte', compact: 'Kompakt', bar: 'Leiste', icon: 'Symbol',
+      resetTime: 'Zurücksetzung', updatedTime: 'Aktualisierung', language: 'Sprache',
+      fontSize: 'Schriftgröße', fsSmall: 'Klein', fsNormal: 'Normal', fsLarge: 'Groß', fsHuge: 'Sehr groß',
+      waiting: 'Warte auf Daten', unavailable: 'Limits sind noch nicht verfügbar.',
+      used: (n) => `${n}% genutzt`,
+      resetToday: (t) => `Zurücksetzung heute um ${t}`,
+      resetTomorrow: (t) => `Zurücksetzung morgen um ${t}`,
+      resetOn: (d) => `Zurücksetzung ${d}`,
+      updatedAt: (t, from) => `aktualisiert um ${t} · ${from}`,
+      srcApi: 'von Claude', srcHistory: 'aus dem App-Cache', srcCache: 'aus dem Cache',
+      limits: {
+        five_hour: '5 Stunden', seven_day: '7 Tage',
+        seven_day_sonnet: 'Sonnet · 7 Tage', seven_day_opus: 'Opus · 7 Tage',
+        seven_day_oauth_apps: 'OAuth-Apps · 7 Tage', seven_day_cowork: 'Cowork · 7 Tage',
+      },
+    },
+    zh: {
+      title: 'Claude · 用量上限', settings: '设置', view: '样式', show: '显示',
+      card: '卡片', compact: '紧凑', bar: '横条', icon: '图标',
+      resetTime: '重置时间', updatedTime: '更新时间', language: '语言',
+      fontSize: '字号', fsSmall: '小', fsNormal: '标准', fsLarge: '大', fsHuge: '特大',
+      waiting: '等待数据', unavailable: '暂时无法获取用量上限。',
+      used: (n) => `已用 ${n}%`,
+      resetToday: (t) => `今天 ${t} 重置`,
+      resetTomorrow: (t) => `明天 ${t} 重置`,
+      resetOn: (d) => `${d} 重置`,
+      updatedAt: (t, from) => `${t} 更新 · ${from}`,
+      srcApi: '来自 Claude', srcHistory: '来自应用缓存', srcCache: '来自缓存',
+      limits: {
+        five_hour: '5 小时', seven_day: '7 天',
+        seven_day_sonnet: 'Sonnet · 7 天', seven_day_opus: 'Opus · 7 天',
+        seven_day_oauth_apps: 'OAuth 应用 · 7 天', seven_day_cowork: 'Cowork · 7 天',
+      },
+    },
+  };
+
+  function detectLang() {
+    const raw = (navigator.language || 'en').toLowerCase();
+    if (raw.startsWith('ru')) return 'ru';
+    if (raw.startsWith('de')) return 'de';
+    if (raw.startsWith('zh')) return 'zh';
+    return 'en';
+  }
+
+  const t = () => I18N[cfg.lang] || I18N.en;
+
+  const labelFor = (key) =>
+    t().limits[key] || String(key).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+
+  function applyI18n() {
+    document.documentElement.lang = cfg.lang;
+    for (const node of document.querySelectorAll('[data-i18n]')) {
+      const value = t()[node.dataset.i18n];
+      if (typeof value === 'string') node.textContent = value;
+    }
+    for (const node of document.querySelectorAll('[data-i18n-opt]')) {
+      const value = t()[node.dataset.i18nOpt];
+      if (typeof value === 'string') node.textContent = value;
+    }
+    if (el.lang) el.lang.value = cfg.lang;
+    if (el.fontSize) el.fontSize.value = String(cfg.scale);
+    document.documentElement.style.setProperty('--scale', String(cfg.scale));
+    for (const [id, key] of [['refresh', 'refreshTitle'], ['gear', 'settings']]) {
+      const node = document.getElementById(id);
+      if (node) node.title = t()[key] || t().settings;
+    }
+  }
+
+  function pct(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    const p = !Number.isInteger(n) && n > 0 && n < 1 ? n * 100 : n;
+    return Math.max(0, Math.min(100, p));
+  }
+
+  const locale = () => (cfg.lang === 'zh' ? 'zh-CN' : cfg.lang);
+
+  function formatReset(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const time = new Intl.DateTimeFormat(locale(), { hour: '2-digit', minute: '2-digit' }).format(date);
+    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+    if (date.toDateString() === now.toDateString()) return t().resetToday(time);
+    if (date.toDateString() === tomorrow.toDateString()) return t().resetTomorrow(time);
+    return t().resetOn(new Intl.DateTimeFormat(locale(),
+      { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date));
+  }
+
+  function formatUpdated() {
+    if (!at) return t().waiting;
+    const date = new Date(at);
+    if (Number.isNaN(date.getTime())) return t().waiting;
+    const time = new Intl.DateTimeFormat(locale(), { hour: '2-digit', minute: '2-digit' }).format(date);
+    const from = source === 'api' ? t().srcApi : source === 'history' ? t().srcHistory : t().srcCache;
+    return t().updatedAt(time, from);
+  }
+
+  function buildRows(target) {
+    target.replaceChildren();
+    let count = 0;
+    if (!limits) return 0;
+    const keys = order.filter((k) => limits[k])
+      .concat(Object.keys(limits).filter((k) => !order.includes(k)));
+    for (const key of keys) {
+      const limit = limits[key];
+      const used = pct(limit && limit.utilization);
+      if (used === null) continue;
+      count += 1;
+      // Полоса растёт вместе с расходом: пустая — ничего не потрачено,
+      // полная — лимит выбран. Жёлтый с 80%, красный с 90%.
+      const spent = Math.round(used);
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = '<div class="line"><span class="name"></span><span class="amount"></span></div>'
+        + '<div class="track"><div class="fill"></div></div><div class="reset"></div>';
+      row.querySelector('.name').textContent = labelFor(key);
+      row.querySelector('.amount').textContent = t().used(spent);
+      const fill = row.querySelector('.fill');
+      fill.style.width = `${spent}%`;
+      fill.className = 'fill' + (spent >= 90 ? ' danger' : spent >= 80 ? ' warn' : '');
+      row.querySelector('.reset').textContent = formatReset(limit.resets_at);
+      target.append(row);
+    }
+    return count;
+  }
+
+  function render() {
+    applyI18n();
+    el.panel.className = `panel ${cfg.style}`;
+    el.panel.classList.toggle('hide-reset', !cfg.showReset);
+    el.panel.classList.toggle('hide-updated', !cfg.showUpdated);
+
+    const count = buildRows(el.rows);
+
+    if (note) el.message.textContent = note;
+    else if (!count) el.message.textContent = t().unavailable;
+    else el.message.textContent = formatUpdated();
+
+    if (el.modal.classList.contains('open')) {
+      const modalCount = buildRows(el.modalRows);
+      el.modalMessage.textContent = modalCount ? formatUpdated() : t().unavailable;
+    }
+
+    document.querySelectorAll('input[name="style"]').forEach((i) => { i.checked = i.value === cfg.style; });
+    el.showReset.checked = !!cfg.showReset;
+    el.showUpdated.checked = !!cfg.showUpdated;
+
+    reportSize();
+  }
+
+  // Ширина берётся из объявленных стилей, а не из замера.
+  // Замер ширины опасен: пока GTK не применил новый размер, панель видна
+  // в старом узком окне, замер возвращает урезанную ширину, окно сужается
+  // ещё сильнее — и панель схлопывается сама в себя.
+  const STYLE_WIDTH = { card: 264, compact: 360, bar: 520, icon: 44 };
+  const POPOVER_WIDTH = 190;
+
+  function reportSize() {
+    requestAnimationFrame(() => {
+      const style = STYLE_WIDTH[cfg.style] ? cfg.style : 'card';
+      const scale = Number(cfg.scale) || 1;
+      let width = STYLE_WIDTH[style];
+      // Высота от замера безопасна: внутренняя раскладка панели опирается на
+      // её собственную ширину из CSS, а не на размер окна. zoom уже учтён в
+      // getBoundingClientRect, а объявленную ширину масштабируем сами.
+      let height = style === 'icon'
+        ? Math.round(STYLE_WIDTH.icon * scale)
+        : Math.ceil(el.panel.getBoundingClientRect().height);
+      width = Math.round(width * scale);
+      if (!height || height < 24) height = Math.round(44 * scale);
+
+      for (const node of [el.settings, el.modal]) {
+        if (!node.classList.contains('open')) continue;
+        width = Math.max(width, Math.round(POPOVER_WIDTH * scale));
+        height += Math.ceil(node.getBoundingClientRect().height) + Math.round(8 * scale);
+      }
+      bridge({ type: 'size', w: width, h: height });
+    });
+  }
+
+  function saveSettings() { bridge({ type: 'settings', value: cfg }); }
+
+  // Если цифры не изменились, перерисовка незаметна и кнопка кажется мёртвой.
+  // Показываем состояние ожидания, пока не придут данные.
+  let busyTimer = null;
+  function markBusy() {
+    el.refresh.textContent = '…';
+    el.refresh.disabled = true;
+    el.modalRefresh.textContent = '…';
+    clearTimeout(busyTimer);
+    busyTimer = setTimeout(clearBusy, 4000);
+  }
+  function clearBusy() {
+    clearTimeout(busyTimer);
+    el.refresh.textContent = '↻';
+    el.refresh.disabled = false;
+    el.modalRefresh.textContent = '↻';
+  }
+
+  el.refresh.addEventListener('click', () => { markBusy(); bridge({ type: 'refresh' }); });
+  el.modalRefresh.addEventListener('click', (e) => {
+    e.stopPropagation(); markBusy(); bridge({ type: 'refresh' });
+  });
+  el.gear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    el.modal.classList.remove('open');
+    el.settings.classList.toggle('open');
+    reportSize();
+  });
+  el.settingsClose.addEventListener('click', (e) => {
+    e.stopPropagation(); el.settings.classList.remove('open'); reportSize();
+  });
+  el.modalClose.addEventListener('click', (e) => {
+    e.stopPropagation(); el.modal.classList.remove('open'); reportSize();
+  });
+  el.panel.addEventListener('click', (e) => {
+    if (cfg.style !== 'icon') return;
+    if (el.settings.contains(e.target)) return;
+    e.stopPropagation();
+    el.settings.classList.remove('open');
+    el.modal.classList.toggle('open');
+    render();
+  });
+  // Меню браузера гасим во всех режимах: в нём есть «Reload», после которого
+  // вместо панели показывалось содержимое файловой системы.
+  document.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (cfg.style !== 'icon') return;
+    if (el.settings.contains(e.target)) return;
+    el.modal.classList.remove('open');
+    el.settings.classList.toggle('open');
+    reportSize();
+  });
+  document.querySelectorAll('input[name="style"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      cfg.style = input.value;
+      if (cfg.style !== 'icon') el.modal.classList.remove('open');
+      saveSettings(); render();
+    });
+  });
+  el.lang.addEventListener('change', () => { cfg.lang = el.lang.value; saveSettings(); render(); });
+  el.fontSize.addEventListener('change', () => {
+    cfg.scale = Number(el.fontSize.value) || 1; saveSettings(); render();
+  });
+  el.showReset.addEventListener('change', () => { cfg.showReset = el.showReset.checked; saveSettings(); render(); });
+  el.showUpdated.addEventListener('change', () => { cfg.showUpdated = el.showUpdated.checked; saveSettings(); render(); });
+
+  // Точка входа со стороны Python: одна строка JSON на сообщение.
+  window.__overlay = (raw) => {
+    let message;
+    try { message = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+    catch (_) { return; }
+    if (message.type === 'settings') {
+      cfg = Object.assign({ style: 'card', showReset: true, showUpdated: true, scale: 1 },
+        message.value || {});
+      if (!I18N[cfg.lang]) cfg.lang = detectLang();
+      if (!Number(cfg.scale)) cfg.scale = 1;
+    } else if (message.type === 'data') {
+      clearBusy();
+      limits = message.limits && Object.keys(message.limits).length ? message.limits : null;
+      // Подписи окон лимитов берём из своего словаря: сервер их не переводит.
+      if (Array.isArray(message.order) && message.order.length) order = message.order;
+      source = message.source || source;
+      at = message.at || at;
+      note = limits ? null : t().unavailable;
+    }
+    render();
+  };
+
+  if (!I18N[cfg.lang]) cfg.lang = detectLang();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+{
+  "manifest_version": "0.2",
+  "name": "claude-limits",
+  "display_name": "Claude Limits",
+  "version": "2.7.0",
+  "description": "Floating panel showing how much of your Claude plan limits you have used. Starts with Claude Desktop.",
+  "long_description": "Shows plan usage (5-hour and 7-day windows, plus per-model windows when the app records them) as a small always-on-top panel pinned to the corner of the Claude Desktop window. It appears when the app starts and closes with it. Four looks: card, compact, bar and icon. Data is read locally from the usage cache Claude Desktop writes on this machine; nothing is sent anywhere. Chat tools (show_limits, get_limits) are available as a fallback.",
+  "author": {
+    "name": "Max"
+  },
+  "license": "MIT",
+  "keywords": [
+    "usage",
+    "limits",
+    "quota",
+    "claude"
+  ],
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.js"
+      ],
+      "env": {
+        "CLAUDE_LIMITS_EXT_DIR": "${__dirname}",
+        "CLAUDE_LIMITS_OVERLAY": "${user_config.overlay}",
+        "CLAUDE_LIMITS_PYTHON": "${user_config.python}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "show_limits",
+      "description": "Show a panel with current Claude plan usage in the chat."
+    },
+    {
+      "name": "get_limits",
+      "description": "Return current Claude plan usage as text and JSON."
+    },
+    {
+      "name": "overlay_status",
+      "description": "Report whether the floating panel is running, and why it is not."
+    },
+    {
+      "name": "overlay_restart",
+      "description": "Restart the floating panel, or close it with off: true."
+    },
+    {
+      "name": "diagnose",
+      "description": "Report which local data sources and desktop environment were found."
+    }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  },
+  "user_config": {
+    "overlay": {
+      "type": "boolean",
+      "title": "Floating panel on startup",
+      "description": "Show the panel in the corner of the Claude Desktop window as soon as the app starts.",
+      "default": true,
+      "required": false
+    },
+    "python": {
+      "type": "string",
+      "title": "Path to python3 (optional)",
+      "description": "Set this if GTK is installed for a different python3 than the first one found.",
+      "default": "",
+      "required": false
+    }
+  },
+  "homepage": "https://github.com/maxsoft87/claude-limits",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxsoft87/claude-limits"
+  }
+}

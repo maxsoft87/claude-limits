@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude limits</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #1b1b1f; --muted: #6b6c76;
+    --line: rgba(0,0,0,.12); --track: rgba(0,0,0,.10);
+    --chip: rgba(0,0,0,.06); --chip-hover: rgba(0,0,0,.11);
+    --ok: #2f9e63; --warn: #c9910f; --danger: #d4544f;
+  }
+  :root[data-theme="dark"], :root.dark {
+    --bg: #1a1a1f; --fg: #f2f2f5; --muted: #a8a9b4;
+    --line: rgba(255,255,255,.14); --track: rgba(255,255,255,.14);
+    --chip: rgba(255,255,255,.10); --chip-hover: rgba(255,255,255,.18);
+    --ok: #76d19b; --warn: #f2c45c; --danger: #ef7d7d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 12px;
+  }
+  .panel { border: 1px solid var(--line); border-radius: 12px; overflow: visible; }
+  .header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 12px 8px; position: relative;
+  }
+  .title { font-weight: 650; font-size: 12.5px; }
+  .actions { display: flex; gap: 4px; }
+  button {
+    appearance: none; border: 0; border-radius: 7px; padding: 4px 8px;
+    font: inherit; font-size: 12px; color: var(--fg); background: var(--chip); cursor: pointer;
+  }
+  button:hover { background: var(--chip-hover); }
+  button:disabled { opacity: .55; cursor: default; }
+  .rows { padding: 0 12px 10px; display: grid; gap: 10px; }
+  .row { display: grid; gap: 5px; min-width: 0; }
+  .line { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+  .name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .amount { font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .track { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+  .fill { height: 100%; border-radius: inherit; background: var(--ok); transition: width .2s ease; }
+  .fill.warn { background: var(--warn); }
+  .fill.danger { background: var(--danger); }
+  .reset { color: var(--muted); font-size: 10.5px; }
+  .message { padding: 0 12px 11px; color: var(--muted); font-size: 11px; }
+  .settings {
+    display: none; position: absolute; right: 10px; top: 38px; z-index: 5;
+    width: 200px; max-width: calc(100vw - 32px); padding: 10px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+    box-shadow: 0 12px 30px rgba(0,0,0,.28);
+  }
+  .settings.open { display: block; }
+  .settings h3 { margin: 0 0 6px; font-size: 12px; }
+  .sub { font-size: 10.5px; color: var(--muted); margin: 8px 0 3px; }
+  label.opt { display: flex; align-items: center; gap: 7px; padding: 3px 1px; font-size: 12px; cursor: pointer; }
+  /* Компактный режим: строки в ряд */
+  .panel.compact .rows { display: flex; flex-wrap: wrap; gap: 14px; }
+  .panel.compact .row { flex: 1 1 130px; }
+  .panel.compact .reset { display: none; }
+  .panel.hide-reset .reset { display: none; }
+  .panel.hide-updated .message { display: none; }
+</style>
+</head>
+<body>
+<section class="panel" id="panel">
+  <div class="header">
+    <span class="title">Claude · limits</span>
+    <span class="actions">
+      <button id="refresh" title="Refresh" aria-label="Refresh">↻</button>
+      <button id="gear" title="Settings" aria-label="Settings">⚙</button>
+    </span>
+    <div class="settings" id="settings">
+      <h3>Settings</h3>
+      <div class="sub">View</div>
+      <label class="opt"><input type="radio" name="style" value="card"> Card</label>
+      <label class="opt"><input type="radio" name="style" value="compact"> Compact</label>
+      <div class="sub">Show</div>
+      <label class="opt"><input type="checkbox" id="showReset"> Reset time</label>
+      <label class="opt"><input type="checkbox" id="showUpdated"> Update time</label>
+    </div>
+  </div>
+  <div class="rows" id="rows"></div>
+  <div class="message" id="message">Loading…</div>
+</section>
+
+<script>
+(() => {
+  'use strict';
+
+  const DEFAULT_ORDER = [
+    ['five_hour', '5 hours'],
+    ['seven_day', '7 days'],
+    ['seven_day_sonnet', 'Sonnet · 7 days'],
+    ['seven_day_opus', 'Opus · 7 days'],
+    ['seven_day_oauth_apps', 'OAuth apps · 7 days'],
+    ['seven_day_cowork', 'Cowork · 7 days'],
+  ];
+  // Набор окон лимитов задаёт сервер: он же присылает подписи и порядок,
+  // поэтому новые ключи появляются в панели без её правки.
+  let order = DEFAULT_ORDER.map(([key]) => key);
+  let labels = Object.fromEntries(DEFAULT_ORDER);
+
+  function labelFor(key) {
+    return labels[key] || String(key).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+  }
+  const SETTINGS_KEY = 'claude-limits.settings.v2';
+
+  const el = {
+    panel: document.getElementById('panel'),
+    rows: document.getElementById('rows'),
+    message: document.getElementById('message'),
+    refresh: document.getElementById('refresh'),
+    gear: document.getElementById('gear'),
+    settings: document.getElementById('settings'),
+    showReset: document.getElementById('showReset'),
+    showUpdated: document.getElementById('showUpdated'),
+  };
+
+  let limits = null;
+  let source = null;
+  let updatedAt = null;
+  let busy = false;
+
+  /* ------------------------------------------------------------- мост */
+
+  let nextId = 1;
+  const pending = new Map();
+
+  function post(message) {
+    try { window.parent.postMessage(message, '*'); } catch (_) {}
+  }
+
+  function request(method, params) {
+    const id = `cl-${nextId++}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`no response to ${method}`));
+      }, 15000);
+      pending.set(id, { resolve, reject, timer });
+      post({ jsonrpc: '2.0', id, method, params: params || {} });
+    });
+  }
+
+  function notify(method, params) {
+    post({ jsonrpc: '2.0', method, params: params || {} });
+  }
+
+  window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (!msg || msg.jsonrpc !== '2.0') return;
+
+    if (msg.id !== undefined && pending.has(msg.id)) {
+      const entry = pending.get(msg.id);
+      pending.delete(msg.id);
+      clearTimeout(entry.timer);
+      if (msg.error) entry.reject(new Error(msg.error.message || 'host error'));
+      else entry.resolve(msg.result);
+      return;
+    }
+
+    if (msg.method === 'ui/notifications/tool-result') {
+      applyPayload(msg.params && msg.params.structuredContent);
+    } else if (msg.method === 'ui/notifications/host-context-changed') {
+      applyTheme(msg.params && (msg.params.hostContext || msg.params));
+    } else if (msg.method === 'ui/resource-teardown') {
+      pending.forEach((e) => clearTimeout(e.timer));
+      pending.clear();
+    }
+  });
+
+  function applyTheme(ctx) {
+    const theme = ctx && (ctx.theme || (ctx.colorScheme));
+    if (theme === 'dark' || theme === 'light') {
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+  }
+
+  function reportSize() {
+    const height = Math.ceil(document.documentElement.scrollHeight);
+    notify('ui/notifications/size-changed', { height, width: null });
+  }
+
+  /* --------------------------------------------------------- настройки */
+
+  function getSettings() {
+    const defaults = { style: 'card', showReset: true, showUpdated: true };
+    try { return Object.assign(defaults, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); }
+    catch (_) { return defaults; }
+  }
+
+  function saveSettings(next) {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch (_) {}
+  }
+
+  function applySettings() {
+    const cfg = getSettings();
+    el.panel.className = `panel ${cfg.style}`;
+    el.panel.classList.toggle('hide-reset', !cfg.showReset);
+    el.panel.classList.toggle('hide-updated', !cfg.showUpdated);
+    document.querySelectorAll('input[name="style"]').forEach((i) => { i.checked = i.value === cfg.style; });
+    el.showReset.checked = !!cfg.showReset;
+    el.showUpdated.checked = !!cfg.showUpdated;
+  }
+
+  /* ------------------------------------------------------------ формат */
+
+  function pct(value) {
+    if (value && typeof value === 'object') {
+      value = value.utilization ?? value.percent ?? value.used ?? value.value;
+    }
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    const p = !Number.isInteger(n) && n > 0 && n < 1 ? n * 100 : n;
+    return Math.max(0, Math.min(100, p));
+  }
+
+  function formatReset(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const time = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(date);
+    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+    if (date.toDateString() === now.toDateString()) return `resets today at ${time}`;
+    if (date.toDateString() === tomorrow.toDateString()) return `resets tomorrow at ${time}`;
+    return `resets ${new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date)}`;
+  }
+
+  function formatUpdated() {
+    if (!updatedAt) return '';
+    const date = new Date(updatedAt);
+    if (Number.isNaN(date.getTime())) return '';
+    const time = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(date);
+    const label = source === 'api' ? 'from Claude' : source === 'history' ? 'from app cache' : 'from extension cache';
+    return `updated at ${time} · ${label}`;
+  }
+
+  /* ------------------------------------------------------------- отрисовка */
+
+  function render(note) {
+    el.refresh.disabled = busy;
+    el.refresh.textContent = busy ? '…' : '↻';
+    el.rows.replaceChildren();
+
+    let count = 0;
+    if (limits) {
+      const keys = order.filter((key) => limits[key])
+        .concat(Object.keys(limits).filter((key) => !order.includes(key)));
+      for (const key of keys) {
+        const limit = limits[key];
+        const used = pct(limit && limit.utilization);
+        if (used === null) continue;
+        count += 1;
+        // Полоса по расходу, а не по остатку: жёлтая с 80%, красная с 90%.
+        const spent = Math.round(used);
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = '<div class="line"><span class="name"></span><span class="amount"></span></div>'
+          + '<div class="track"><div class="fill"></div></div><div class="reset"></div>';
+        row.querySelector('.name').textContent = labelFor(key);
+        row.querySelector('.amount').textContent = `${spent}% used`;
+        const fill = row.querySelector('.fill');
+        fill.style.width = `${spent}%`;
+        fill.className = 'fill' + (spent >= 90 ? ' danger' : spent >= 80 ? ' warn' : '');
+        row.querySelector('.reset').textContent = formatReset(limit.resets_at);
+        el.rows.append(row);
+      }
+    }
+
+    if (note) el.message.textContent = note;
+    else if (!count) el.message.textContent = 'This plan does not publish limit windows.';
+    else el.message.textContent = formatUpdated();
+
+    applySettings();
+    requestAnimationFrame(reportSize);
+  }
+
+  function applyPayload(payload) {
+    if (!payload) return;
+    if (payload.labels && Object.keys(payload.labels).length) {
+      labels = Object.assign({}, Object.fromEntries(DEFAULT_ORDER), payload.labels);
+    }
+    if (Array.isArray(payload.order) && payload.order.length) order = payload.order;
+    if (payload.limits && Object.keys(payload.limits).length) {
+      limits = payload.limits;
+      source = payload.source || source;
+      updatedAt = payload.at || updatedAt;
+    }
+    render(limits ? null : (payload.notes && payload.notes[0]) || 'No data yet.');
+  }
+
+  /* --------------------------------------------------- получение данных */
+
+  // Живые данные: тот же авторизованный эндпоинт, который использует само
+  // приложение. Работает, если панель открыта внутри Claude на claude.ai.
+  async function fetchLive() {
+    const base = 'https://claude.ai';
+    const opts = { credentials: 'include', cache: 'no-store', headers: { Accept: 'application/json' } };
+    const orgsRes = await fetch(`${base}/api/organizations`, opts);
+    if (!orgsRes.ok) throw new Error(`HTTP ${orgsRes.status}`);
+    const orgs = await orgsRes.json();
+    const list = Array.isArray(orgs) ? orgs : (orgs && orgs.organizations) || [];
+    const org = list.find((o) => o && (o.uuid || o.id));
+    if (!org) throw new Error('organization not found');
+    const id = org.uuid || org.id;
+    const usageRes = await fetch(`${base}/api/organizations/${encodeURIComponent(id)}/usage?skip_spend=1`, opts);
+    if (!usageRes.ok) throw new Error(`HTTP ${usageRes.status}`);
+    const usage = await usageRes.json();
+    if (!usage || typeof usage !== 'object') throw new Error('пустой ответ');
+    return usage;
+  }
+
+  async function callTool(name, args) {
+    const result = await request('tools/call', { name, arguments: args || {} });
+    return result && result.structuredContent;
+  }
+
+  async function refresh() {
+    if (busy) return;
+    busy = true;
+    render(limits ? null : 'Обновление…');
+
+    let liveOk = false;
+    try {
+      const usage = await fetchLive();
+      // Нормализацию ключей делает сервер расширения, поэтому отдаём ответ API
+      // целиком и забираем обратно уже приведённый к канону вид.
+      const at = new Date().toISOString();
+      const saved = await callTool('save_limits', { limits: usage, at });
+      if (saved && saved.limits && Object.keys(saved.limits).length) {
+        applyPayload(Object.assign({ source: 'api', at }, saved));
+        liveOk = true;
+      }
+    } catch (_) {
+      // Прямой запрос недоступен — берём локальные данные с сервера расширения.
+    }
+
+    if (!liveOk) {
+      try {
+        const payload = await callTool('get_limits');
+        if (payload && payload.limits && Object.keys(payload.limits).length) {
+          limits = payload.limits;
+          source = payload.source;
+          updatedAt = payload.at;
+        } else if (!limits) {
+          busy = false;
+          render('Лимиты недоступны: приложение ещё не сохранило их локально, а прямой запрос заблокирован.');
+          return;
+        }
+      } catch (error) {
+        busy = false;
+        render(`Не удалось получить лимиты: ${error.message}`);
+        return;
+      }
+    }
+
+    busy = false;
+    render();
+  }
+
+  /* ------------------------------------------------------------ события */
+
+  el.refresh.addEventListener('click', refresh);
+  el.gear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    el.settings.classList.toggle('open');
+    requestAnimationFrame(reportSize);
+  });
+  document.addEventListener('click', (e) => {
+    if (!el.settings.contains(e.target) && e.target !== el.gear) el.settings.classList.remove('open');
+  });
+  document.querySelectorAll('input[name="style"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const cfg = getSettings(); cfg.style = input.value; saveSettings(cfg); applySettings(); reportSize();
+    });
+  });
+  el.showReset.addEventListener('change', () => {
+    const cfg = getSettings(); cfg.showReset = el.showReset.checked; saveSettings(cfg); applySettings(); reportSize();
+  });
+  el.showUpdated.addEventListener('change', () => {
+    const cfg = getSettings(); cfg.showUpdated = el.showUpdated.checked; saveSettings(cfg); applySettings(); reportSize();
+  });
+  window.addEventListener('resize', reportSize, { passive: true });
+
+  /* ------------------------------------------------------------- запуск */
+
+  applySettings();
+  request('ui/initialize', { protocolVersion: '2026-01-26', capabilities: {} })
+    .then((result) => applyTheme(result && (result.hostContext || result)))
+    .catch(() => {})
+    .finally(() => {
+      notify('ui/notifications/initialized', {});
+      refresh();
+      setInterval(refresh, 5 * 60 * 1000);
+    });
+})();
+</script>
+</body>
+</html>
